@@ -129,31 +129,39 @@ func (c *Context) NewKeymapRules(rules, model, layout, variant, options string) 
 	})
 }
 
-// NewKeymapFD maps exactly size bytes read-only and privately, then compiles the
-// Wayland xkb_v1 format. The caller retains ownership of fd, including on error;
-// this function never closes it. The mapping is removed before return. size must
-// include the terminating NUL required by the Wayland protocol.
+// NewKeymapFD copies exactly size bytes from offset zero of a Wayland xkb_v1
+// keymap FD (at most 16 MiB). A trailing Wayland NUL, if present, is excluded
+// from the compiled text. The caller retains ownership of fd, even on error.
 func (c *Context) NewKeymapFD(fd int, size int) (*Keymap, error) {
-	if fd < 0 || size < 1 || size > 64<<20 {
-		return nil, errors.New("xkbcommon: invalid keymap FD or size (limit 64 MiB)")
+	if fd < 0 || size < 1 || size > 16<<20 {
+		return nil, errors.New("xkbcommon: invalid keymap FD or size (limit 16 MiB)")
 	}
 	var stat syscall.Stat_t
 	if e := syscall.Fstat(fd, &stat); e != nil {
 		return nil, fmt.Errorf("xkbcommon: stat keymap FD: %w", e)
 	}
-	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG || stat.Size < int64(size) {
-		return nil, errors.New("xkbcommon: keymap FD is not a regular file of the supplied size")
+	if stat.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		return nil, errors.New("xkbcommon: keymap FD is not a regular file")
 	}
-	b, e := syscall.Mmap(fd, 0, size, syscall.PROT_READ, syscall.MAP_PRIVATE)
-	if e != nil {
-		return nil, fmt.Errorf("xkbcommon: mmap keymap: %w", e)
+	b := make([]byte, size)
+	for offset := 0; offset < size; {
+		n, e := syscall.Pread(fd, b[offset:], int64(offset))
+		offset += n
+		if e == syscall.EINTR {
+			continue
+		}
+		if e != nil {
+			return nil, fmt.Errorf("xkbcommon: read keymap FD: %w", e)
+		}
+		if n == 0 {
+			return nil, fmt.Errorf("xkbcommon: read keymap FD: %w", errors.New("short read"))
+		}
 	}
-	defer syscall.Munmap(b)
-	if b[len(b)-1] != 0 {
-		return nil, errors.New("xkbcommon: Wayland keymap not NUL terminated")
+	if b[len(b)-1] == 0 {
+		b = b[:len(b)-1]
 	}
 	return newKeymap(c, func(h uintptr) uintptr {
-		v := loader.f.Xkb_keymap_new_from_buffer(h, ptr(b), uintptr(size-1), raw.XKB_KEYMAP_FORMAT_TEXT_V1, 0)
+		v := loader.f.Xkb_keymap_new_from_buffer(h, ptr(b), uintptr(len(b)), raw.XKB_KEYMAP_FORMAT_TEXT_V1, 0)
 		runtime.KeepAlive(b)
 		return v
 	})

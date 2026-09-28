@@ -2,8 +2,10 @@ package xkbcommon
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strings"
 	"testing"
 	"unsafe"
@@ -89,20 +91,30 @@ func TestMalformedAndLifetime(t *testing.T) {
 }
 func TestFD(t *testing.T) {
 	c := live(t)
+	short := keymapFile(t, []byte("short"))
+	if _, e := c.NewKeymapFD(int(short.Fd()), 4096); e == nil || !strings.Contains(e.Error(), "short read") {
+		t.Fatalf("truncated keymap: %v", e)
+	}
+	if _, e := short.Stat(); e != nil {
+		t.Fatalf("FD was closed on error: %v", e)
+	}
+	for _, size := range []int{0, 16<<20 + 1} {
+		if _, e := c.NewKeymapFD(int(short.Fd()), size); e == nil {
+			t.Fatalf("accepted size %d", size)
+		}
+	}
+	if _, e := c.NewKeymapFD(-1, 5); e == nil {
+		t.Fatal("negative FD")
+	}
+	if _, e := exec.LookPath("xkbcli"); e != nil {
+		t.Skipf("xkbcli compile-keymap reference unavailable: %v", e)
+	}
 	out, e := exec.Command("xkbcli", "compile-keymap", "--rules", "evdev", "--model", "pc105", "--layout", "fr", "--output-format", "1").Output()
 	if e != nil {
 		t.Fatalf("reference xkbcli: %v", e)
 	}
-	f, e := os.CreateTemp(t.TempDir(), "keymap")
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer f.Close()
-	data := append(out, 0)
-	if _, e = f.Write(data); e != nil {
-		t.Fatal(e)
-	}
-	other, e := c.NewKeymapFD(int(f.Fd()), len(data))
+	f := keymapFile(t, append(out, 0))
+	other, e := c.NewKeymapFD(int(f.Fd()), len(out)+1)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -110,11 +122,41 @@ func TestFD(t *testing.T) {
 	if _, e = f.Stat(); e != nil {
 		t.Fatalf("FD was closed: %v", e)
 	}
-	if _, e = c.NewKeymapFD(int(f.Fd()), len(data)-1); e == nil {
-		t.Fatal("missing NUL accepted")
+	if _, e = c.NewKeymapFD(int(f.Fd()), len(out)+2); e == nil || !strings.Contains(e.Error(), "short read") {
+		t.Fatalf("truncated keymap: %v", e)
 	}
-	if _, e = c.NewKeymapFD(-1, len(data)); e == nil {
-		t.Fatal("negative FD")
+	if _, e = c.NewKeymapFD(int(f.Fd()), len(out)); e != nil {
+		t.Fatalf("non-NUL text: %v", e)
+	}
+}
+
+func keymapFile(t *testing.T, data []byte) *os.File {
+	t.Helper()
+	f, e := os.CreateTemp(t.TempDir(), "keymap")
+	if e != nil {
+		t.Fatal(e)
+	}
+	t.Cleanup(func() { f.Close() })
+	if _, e = f.Write(data); e != nil {
+		t.Fatal(e)
+	}
+	return f
+}
+
+func TestLoaderDiagnostics(t *testing.T) {
+	_, e := resolveLibrary("/no/such/libxkbcommon.so", raw.Symbols)
+	if e == nil || !strings.Contains(e.Error(), "load /no/such/libxkbcommon.so") {
+		t.Fatalf("missing library: %v", e)
+	}
+	if e := Available(); e != nil {
+		if strings.Contains(e.Error(), "load libxkbcommon.so.0") {
+			t.Skipf("missing symbol test needs libxkbcommon.so.0: %v", e)
+		}
+		t.Fatal(e)
+	}
+	_, e = resolveLibrary("libxkbcommon.so.0", []string{"xkb_nonexistent_test_symbol"})
+	if e == nil || !strings.Contains(e.Error(), "missing xkb_nonexistent_test_symbol") {
+		t.Fatalf("missing symbol: %v", e)
 	}
 }
 func TestLayoutsAndDifferential(t *testing.T) {
@@ -191,6 +233,123 @@ func TestLayoutsAndDifferential(t *testing.T) {
 		t.Fatalf("mods %#x", mods)
 	}
 }
+
+// These expectations are fixed evdev/XKB facts, not values computed by the
+// binding under test. Every case compiles through the Wayland FD path.
+func TestFDReferenceKeyEvents(t *testing.T) {
+	c := live(t)
+	if _, e := exec.LookPath("xkbcli"); e != nil {
+		t.Logf("xkbcli compile-keymap/how-to-type comparison skipped: %v", e)
+	}
+	for _, tc := range []struct {
+		layout, key, utf8, modifiers string
+		evdev, group, sym            uint32
+	}{
+		{"us", "q", "q", "", 16, 0, raw.XKB_KEY_q},
+		{"us", "Q", "Q", "Shift", 16, 0, raw.XKB_KEY_Q},
+		{"us", "Q", "Q", "Lock", 16, 0, raw.XKB_KEY_Q},
+		{"fr", "a", "a", "", 16, 0, raw.XKB_KEY_a},
+		{"fr", "€", "€", "Mod5", 18, 0, raw.XKB_KEY_EuroSign},
+		{"de", "z", "z", "", 21, 0, raw.XKB_KEY_z},
+		{"de", "@", "@", "Mod5", 16, 0, raw.XKB_KEY_at},
+		{"de", "dead_circumflex", "", "", 41, 0, raw.XKB_KEY_dead_circumflex},
+		{"us,fr", "a", "a", "", 16, 1, raw.XKB_KEY_a},
+	} {
+		t.Run(tc.layout+"/"+tc.key+"/"+tc.modifiers, func(t *testing.T) {
+			// xkbcli independently compiles the text used by the Wayland FD path.
+			// Without it, still check the fixed reference table against rules.
+			var k *Keymap
+			if _, e := exec.LookPath("xkbcli"); e == nil {
+				text, e := exec.Command("xkbcli", "compile-keymap", "--layout", tc.layout, "--output-format", "1").Output()
+				if e != nil {
+					t.Fatal(e)
+				}
+				f := keymapFile(t, append(text, 0))
+				k, e = c.NewKeymapFD(int(f.Fd()), len(text)+1)
+				if e != nil {
+					t.Fatal(e)
+				}
+				t.Cleanup(func() { k.Close() })
+			} else {
+				k = rules(t, c, tc.layout)
+			}
+			s := state(t, k)
+			var mask uint32
+			if tc.modifiers != "" {
+				idx, e := k.ModIndex(tc.modifiers)
+				if e != nil || idx >= 32 {
+					t.Fatalf("modifier %s: %d %v", tc.modifiers, idx, e)
+				}
+				mask = 1 << idx
+			}
+			var depressed, locked uint32
+			if tc.modifiers == "Lock" {
+				locked = mask
+			} else {
+				depressed = mask
+			}
+			if _, e := s.UpdateMask(depressed, 0, locked, 0, 0, tc.group); e != nil {
+				t.Fatal(e)
+			}
+			if group, e := s.Layout(); e != nil || group != tc.group {
+				t.Fatalf("group %d: %v", group, e)
+			}
+			code := WaylandKeycode(tc.evdev)
+			if sym, e := s.KeySym(code); e != nil || sym != tc.sym {
+				t.Fatalf("keysym %#x want %#x: %v", sym, tc.sym, e)
+			}
+			if v, e := s.UTF8(code); e != nil || v != tc.utf8 {
+				t.Fatalf("utf8 %q want %q: %v", v, tc.utf8, e)
+			}
+			if tc.sym == raw.XKB_KEY_dead_circumflex {
+				if v, e := s.UTF8(WaylandKeycode(18)); e != nil || v != "e" {
+					t.Fatalf("compose input e: %q %v", v, e)
+				}
+				table, e := c.NewComposeTable("en_US.UTF-8")
+				if e != nil {
+					t.Fatal(e)
+				}
+				t.Cleanup(func() { table.Close() })
+				compose, e := table.NewState()
+				if e != nil {
+					t.Fatal(e)
+				}
+				t.Cleanup(func() { compose.Close() })
+				if _, e := compose.Feed(tc.sym); e != nil {
+					t.Fatal(e)
+				}
+				if _, e := compose.Feed(raw.XKB_KEY_e); e != nil {
+					t.Fatal(e)
+				}
+				if status, e := compose.Status(); e != nil || status != raw.XKB_COMPOSE_COMPOSED {
+					t.Fatalf("compose status %d: %v", status, e)
+				}
+				if sym, e := compose.KeySym(); e != nil || sym != raw.XKB_KEY_ecircumflex {
+					t.Fatalf("compose sym %#x: %v", sym, e)
+				}
+				if v, e := compose.UTF8(); e != nil || v != "ê" {
+					t.Fatalf("compose utf8 %q: %v", v, e)
+				}
+			}
+			if _, e := exec.LookPath("xkbcli"); e == nil && tc.group == 0 && tc.modifiers != "Lock" {
+				args := []string{"how-to-type", "--layout", tc.layout}
+				if tc.sym == raw.XKB_KEY_dead_circumflex {
+					args = append(args, "--keysym")
+				}
+				out, e := exec.Command("xkbcli", append(args, tc.key)...).Output()
+				if e != nil {
+					t.Fatal(e)
+				}
+				// The CLI reports XKB keycodes, not evdev codes.
+				pattern := regexp.MustCompile(`(?m)^\s*` + fmt.Sprint(code) + `\s+\S+\s+\d+\s+.*\[.*\]`)
+				if !pattern.Match(out) {
+					t.Fatalf("xkbcli how-to-type lacks keycode %d: %s", code, out)
+				}
+			}
+		})
+	}
+}
+
 func TestCompose(t *testing.T) {
 	c := live(t)
 	table, e := c.NewComposeTable("en_US.UTF-8")
