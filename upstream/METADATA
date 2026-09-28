@@ -1,0 +1,6 @@
+Source: https://github.com/xkbcommon/libxkbcommon
+Tag: xkbcommon-1.13.2
+Commit: d1442aaa6b635551182e83c3b55037f4c118c962
+Files: include/xkbcommon/{xkbcommon.h,xkbcommon-compose.h,xkbcommon-keysyms.h,xkbcommon-names.h}, LICENSE
+SHA-256: see SHA256SUMS (paths relative to repository root)
+Note: the keysyms header includes third-party copyright and license notices; preserve it verbatim.
