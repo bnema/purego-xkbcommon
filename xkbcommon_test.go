@@ -238,9 +238,6 @@ func TestLayoutsAndDifferential(t *testing.T) {
 // binding under test. Every case compiles through the Wayland FD path.
 func TestFDReferenceKeyEvents(t *testing.T) {
 	c := live(t)
-	if _, e := exec.LookPath("xkbcli"); e != nil {
-		t.Logf("xkbcli compile-keymap/how-to-type comparison skipped: %v", e)
-	}
 	for _, tc := range []struct {
 		layout, key, utf8, modifiers string
 		evdev, group, sym            uint32
@@ -256,23 +253,19 @@ func TestFDReferenceKeyEvents(t *testing.T) {
 		{"us,fr", "a", "a", "", 16, 1, raw.XKB_KEY_a},
 	} {
 		t.Run(tc.layout+"/"+tc.key+"/"+tc.modifiers, func(t *testing.T) {
-			// xkbcli independently compiles the text used by the Wayland FD path.
-			// Without it, still check the fixed reference table against rules.
-			var k *Keymap
-			if _, e := exec.LookPath("xkbcli"); e == nil {
-				text, e := exec.Command("xkbcli", "compile-keymap", "--layout", tc.layout, "--output-format", "1").Output()
-				if e != nil {
-					t.Fatal(e)
-				}
-				f := keymapFile(t, append(text, 0))
-				k, e = c.NewKeymapFD(int(f.Fd()), len(text)+1)
-				if e != nil {
-					t.Fatal(e)
-				}
-				t.Cleanup(func() { k.Close() })
-			} else {
-				k = rules(t, c, tc.layout)
+			// Wayland-format keymaps pinned in testdata/keymaps were produced by
+			// `xkbcli compile-keymap --output-format 1` (libxkbcommon 1.13.2), so
+			// the FD path is always exercised without optional tools.
+			text, e := os.ReadFile("testdata/keymaps/" + strings.ReplaceAll(tc.layout, ",", "_") + ".xkb")
+			if e != nil {
+				t.Fatal(e)
 			}
+			f := keymapFile(t, append(text, 0))
+			k, e := c.NewKeymapFD(int(f.Fd()), len(text)+1)
+			if e != nil {
+				t.Fatal(e)
+			}
+			t.Cleanup(func() { k.Close() })
 			s := state(t, k)
 			var mask uint32
 			if tc.modifiers != "" {
