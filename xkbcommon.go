@@ -5,6 +5,7 @@ package xkbcommon
 import (
 	"errors"
 	"fmt"
+	"io"
 	"runtime"
 	"strings"
 	"sync"
@@ -332,6 +333,57 @@ func sizedUTF8(call func(uintptr, uintptr) int32) (string, error) {
 	}
 	return "", errors.New("xkbcommon: UTF-8 result changed during sizing")
 }
+
+// MaxUTF8Buffer is the byte API's maximum scratch length, including the
+// native trailing NUL. Thus a full result can contain at most 511 payload bytes.
+const MaxUTF8Buffer = 512
+
+// ErrUTF8Buffer reports a destination buffer whose length is outside
+// 1..MaxUTF8Buffer.
+var ErrUTF8Buffer = fmt.Errorf("xkbcommon: UTF-8 buffer length must be 1..%d", MaxUTF8Buffer)
+
+// utf8Into never creates a string or keeps the caller's storage. Native writes
+// are synchronous; the backing array is pinned only for the duration of the call.
+// Short buffers are wiped rather than exposing truncated UTF-8 or credentials.
+// Callers clear dst before any early return.
+func utf8Into(dst []byte, call func(uintptr, uintptr) int32) (int, error) {
+	if len(dst) < 1 || len(dst) > MaxUTF8Buffer {
+		return 0, ErrUTF8Buffer
+	}
+	var pin runtime.Pinner
+	pin.Pin(&dst[0])
+	defer pin.Unpin()
+	n := call(ptr(dst), uintptr(len(dst)))
+	runtime.KeepAlive(dst)
+	if n < 0 {
+		clear(dst)
+		return 0, errors.New("xkbcommon: UTF-8 conversion failed")
+	}
+	if int(n) >= len(dst) {
+		clear(dst)
+		return int(n), io.ErrShortBuffer
+	}
+	clear(dst[n:])
+	return int(n), nil
+}
+
+// UTF8Into writes into caller-owned mutable storage without constructing a
+// string. n excludes NUL; on io.ErrShortBuffer n is the required payload size,
+// all of dst is cleared, and the caller needs n+1 bytes. dst must have length
+// 1..MaxUTF8Buffer. No storage is retained; the caller owns wiping after use.
+func (s *State) UTF8Into(keycode uint32, dst []byte) (int, error) {
+	clear(dst)
+	if s == nil {
+		return 0, ErrClosed
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.h == 0 {
+		return 0, ErrClosed
+	}
+	return utf8Into(dst, func(p, n uintptr) int32 { return loader.f.Xkb_state_key_get_utf8(s.h, keycode, p, n) })
+}
+
 func (s *State) UTF8(keycode uint32) (string, error) {
 	if s == nil {
 		return "", ErrClosed
@@ -464,6 +516,22 @@ func (s *ComposeState) Status() (uint32, error) {
 	}
 	return loader.f.Xkb_compose_state_get_status(s.h), nil
 }
+
+// UTF8Into is the compose counterpart of State.UTF8Into, with identical
+// bounds, ownership, NUL and short-buffer semantics. It does not reset compose.
+func (s *ComposeState) UTF8Into(dst []byte) (int, error) {
+	clear(dst)
+	if s == nil {
+		return 0, ErrClosed
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.h == 0 {
+		return 0, ErrClosed
+	}
+	return utf8Into(dst, func(p, n uintptr) int32 { return loader.f.Xkb_compose_state_get_utf8(s.h, p, n) })
+}
+
 func (s *ComposeState) UTF8() (string, error) {
 	if s == nil {
 		return "", ErrClosed
