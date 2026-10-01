@@ -54,7 +54,8 @@ func constants(h string) string {
 }
 
 // Functions describes the bound ABI; each name is checked against the pinned headers.
-// Pointers are uintptr to avoid GC passing Go pointers to native code unexpectedly.
+// Go memory is passed as unsafe.Pointer and converted inside the Syscall call
+// expression; native handles (contexts, keymaps, states) are uintptr.
 var Functions = []struct{ Name, Signature string }{
 	{"xkb_context_new", "func(uint32) uintptr"}, {"xkb_context_ref", "func(uintptr) uintptr"}, {"xkb_context_unref", "func(uintptr)"},
 	{"xkb_keymap_new_from_names", "func(uintptr, unsafe.Pointer, uint32) uintptr"}, {"xkb_keymap_new_from_string", "func(uintptr, unsafe.Pointer, uint32, uint32) uintptr"}, {"xkb_keymap_new_from_buffer", "func(uintptr, unsafe.Pointer, uintptr, uint32, uint32) uintptr"},

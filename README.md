@@ -23,7 +23,7 @@ Pinned upstream headers and licenses are in `upstream/`; `upstream/METADATA` and
 
 ## Allocation-free hot path
 
-`raw.Funcs` holds symbol addresses resolved once by `Available`; every generated method calls `purego.Syscall6` (or `Syscall15` for more than six arguments) directly, so no reflection or return boxing happens per call. Per-key calls — `State.KeySym`, `State.UTF8Into`, `State.UpdateMask`, `State.Layout`, `State.Mods`, `State.ModIndexActive`, `State.ModNameActive`, `Keymap.KeyRepeats`, `KeysymNameInto` and the `ComposeState` `Feed`/`Status`/`KeySym`/`UTF8Into`/`Reset` methods — perform 0 allocations (asserted by `TestHotPathAllocs`). The string-returning `UTF8` and `KeysymName` still allocate their result.
+`raw.Funcs` holds symbol addresses resolved once by `Available`; every generated method calls `purego.Syscall6` (or `Syscall15` for more than six arguments) directly, so no reflection or return boxing happens per call. Per-key calls — `State.KeySym`, `State.UTF8Into`, `State.UpdateMask`, `State.Layout`, `State.Mods`, `State.ModIndexActive`, `State.ModNameActive`, `Keymap.KeyRepeats`, `KeysymNameInto` and the `ComposeState` `Feed`/`Status`/`KeySym`/`UTF8Into`/`Reset` methods — perform 0 allocations (asserted by `TestHotPathAllocs`). The `*Into` methods stay allocation-free only with a long-lived `dst` reused across calls: a buffer passed to C escapes, so a fresh local array costs one allocation per call. The string-returning `UTF8` and `KeysymName` still allocate their result.
 
 
 ## v0.2.0: `raw` API change
