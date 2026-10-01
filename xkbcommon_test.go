@@ -198,7 +198,7 @@ func TestLayoutsAndDifferential(t *testing.T) {
 			if nativeSym != sym {
 				t.Fatalf("native sym %d != %d", nativeSym, sym)
 			}
-			nativeN := loader.f.Xkb_state_key_get_utf8(s.h, tc.code, 0, 0)
+			nativeN := loader.f.Xkb_state_key_get_utf8(s.h, tc.code, nil, 0)
 			if nativeN != int32(len(got)) {
 				t.Fatalf("native bytes %d != %d", nativeN, len(got))
 			}
@@ -387,11 +387,11 @@ func TestCompose(t *testing.T) {
 	}
 }
 func TestSizing(t *testing.T) {
-	v, e := sizedUTF8(func(p, n uintptr) int32 { return 0 })
+	v, e := sizedUTF8(func(p unsafe.Pointer, n uintptr) int32 { return 0 })
 	if e != nil || v != "" {
 		t.Fatalf("%q %v", v, e)
 	}
-	_, e = sizedUTF8(func(p, n uintptr) int32 { return -1 })
+	_, e = sizedUTF8(func(p unsafe.Pointer, n uintptr) int32 { return -1 })
 	if e == nil {
 		t.Fatal("negative result accepted")
 	}

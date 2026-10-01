@@ -15,7 +15,7 @@ var loader struct {
 }
 
 // resolveLibrary keeps path and required symbols injectable for diagnostic tests.
-// On success it leaves the library open for the lifetime of registered functions.
+// On success it leaves the library open for the lifetime of resolved function addresses.
 func resolveLibrary(path string, symbols []string) (map[string]uintptr, error) {
 	lib, err := purego.Dlopen(path, purego.RTLD_NOW|purego.RTLD_LOCAL)
 	if err != nil {
@@ -42,8 +42,8 @@ func Available() error {
 			loader.err = err
 			return
 		}
-		raw.Register(&loader.f, addresses, purego.RegisterFunc)
-		// Intentionally keep the library open: registered function pointers and live
+		raw.Register(&loader.f, addresses)
+		// Intentionally keep the library open: resolved function addresses and live
 		// native objects remain valid for the process lifetime.
 	})
 	return loader.err

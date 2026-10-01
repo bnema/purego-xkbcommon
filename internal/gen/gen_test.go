@@ -23,3 +23,23 @@ func TestConstants(t *testing.T) {
 		}
 	}
 }
+
+func TestMethodWhitelist(t *testing.T) {
+	for _, sig := range []string{"func(float64) uint32", "func(bool)", "func(uintptr, ...uintptr) uint32", "func(uint32) float32", "func(uint32) unsafe.Pointer", "func(*int)", "func(uint32) bool"} {
+		if _, err := method("xkb_bad", sig); err == nil {
+			t.Fatalf("accepted %s", sig)
+		}
+	}
+	got, err := method("xkb_ok", "func(uintptr, unsafe.Pointer, int32) uint32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"purego.Syscall6(f.xkb_ok, a1, uintptr(a2), uintptr(a3), 0, 0, 0)", "return uint32(r)", "a2 unsafe.Pointer"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("missing %q in %s", want, got)
+		}
+	}
+	if got, _ = method("xkb_seven", "func(uintptr,uint32,uint32,uint32,uint32,uint32,uint32)"); !strings.Contains(got, "purego.Syscall15(") {
+		t.Fatal("seven args must use Syscall15")
+	}
+}
