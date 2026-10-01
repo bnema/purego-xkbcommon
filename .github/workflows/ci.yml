@@ -1,0 +1,30 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  # Arch ships the libxkbcommon the bindings are pinned against; the live
+  # tests load it through purego. gcc is for the race detector.
+  check:
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:latest
+      options: --init
+    steps:
+      - run: pacman -Syu --noconfirm --needed git go gcc libxkbcommon xkeyboard-config
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: git config --global --add safe.directory "$GITHUB_WORKSPACE"
+      - run: CGO_ENABLED=0 go vet ./...
+      - run: go run honnef.co/go/tools/cmd/staticcheck@latest ./...
+      - run: CGO_ENABLED=0 go test -count=1 ./...
+      - run: CGO_ENABLED=1 go test -race -count=1 ./...
+      - name: generated code is current
+        run: |
+          GOWORK=off go generate ./...
+          git diff --exit-code
