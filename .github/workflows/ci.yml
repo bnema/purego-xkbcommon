@@ -14,8 +14,14 @@ jobs:
     container:
       image: archlinux:latest
       options: --init
+    env:
+      LANG: en_US.UTF-8
     steps:
-      - run: pacman -Syu --noconfirm --needed git go gcc libxkbcommon xkeyboard-config
+      # Compose tests need the en_US.UTF-8 locale and its Compose file (libx11).
+      - run: |
+          pacman -Syu --noconfirm --needed git go gcc glibc-locales libxkbcommon libx11 xkeyboard-config
+          echo 'en_US.UTF-8 UTF-8' > /etc/locale.gen
+          locale-gen
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
