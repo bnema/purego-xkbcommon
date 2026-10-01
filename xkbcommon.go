@@ -213,6 +213,19 @@ func (k *Keymap) ModIndex(name string) (uint32, error) {
 	runtime.KeepAlive(b)
 	return v, nil
 }
+
+// KeyRepeats reports whether the key repeats when held. It does not allocate.
+func (k *Keymap) KeyRepeats(keycode uint32) (bool, error) {
+	if k == nil {
+		return false, ErrClosed
+	}
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	if k.h == 0 {
+		return false, ErrClosed
+	}
+	return loader.f.Xkb_keymap_key_repeats(k.h, keycode) > 0, nil
+}
 func (k *Keymap) LayoutCount() (uint32, error) {
 	if k == nil {
 		return 0, ErrClosed
@@ -284,6 +297,49 @@ func (s *State) Layout() (uint32, error) {
 	}
 	return loader.f.Xkb_state_serialize_layout(s.h, raw.XKB_STATE_LAYOUT_EFFECTIVE), nil
 }
+
+// ModIndexActive reports whether the modifier at idx is effectively active.
+// It does not allocate. An unknown index reports false.
+func (s *State) ModIndexActive(idx uint32) (bool, error) {
+	if s == nil {
+		return false, ErrClosed
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.h == 0 {
+		return false, ErrClosed
+	}
+	return loader.f.Xkb_state_mod_index_is_active(s.h, idx, raw.XKB_STATE_MODS_EFFECTIVE) > 0, nil
+}
+
+// ModNameActive reports whether the named modifier (for example
+// raw.XKB_MOD_NAME_CTRL) is effectively active. Names up to 63 bytes do not
+// allocate. An unknown name reports false.
+func (s *State) ModNameActive(name string) (bool, error) {
+	if e := validString(name); e != nil {
+		return false, e
+	}
+	if s == nil {
+		return false, ErrClosed
+	}
+	var small [64]byte
+	var b []byte
+	if len(name) < len(small) {
+		copy(small[:], name)
+		b = small[:len(name)+1]
+	} else {
+		b = cstr(name)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.h == 0 {
+		return false, ErrClosed
+	}
+	v := loader.f.Xkb_state_mod_name_is_active(s.h, ptr(b), raw.XKB_STATE_MODS_EFFECTIVE)
+	runtime.KeepAlive(b)
+	return v > 0, nil
+}
+
 func (s *State) Mods() (uint32, error) {
 	if s == nil {
 		return 0, ErrClosed
@@ -400,6 +456,16 @@ func KeysymName(sym uint32) (string, error) {
 		return "", e
 	}
 	return sizedUTF8(func(p, n uintptr) int32 { return loader.f.Xkb_keysym_get_name(sym, p, n) })
+}
+
+// KeysymNameInto writes the keysym name into dst without allocating, with the
+// same bounds and short-buffer semantics as State.UTF8Into.
+func KeysymNameInto(sym uint32, dst []byte) (int, error) {
+	clear(dst)
+	if e := Available(); e != nil {
+		return 0, e
+	}
+	return utf8Into(dst, func(p, n uintptr) int32 { return loader.f.Xkb_keysym_get_name(sym, p, n) })
 }
 func KeysymFromName(name string) (uint32, error) {
 	if e := Available(); e != nil {
