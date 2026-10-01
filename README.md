@@ -24,3 +24,14 @@ Pinned upstream headers and licenses are in `upstream/`; `upstream/METADATA` and
 ## Allocation-free hot path
 
 `raw.Funcs` holds symbol addresses resolved once by `Available`; every generated method calls `purego.Syscall6` (or `Syscall15` for more than six arguments) directly, so no reflection or return boxing happens per call. Per-key calls — `State.KeySym`, `State.UTF8Into`, `State.UpdateMask`, `State.Layout`, `State.Mods`, `State.ModIndexActive`, `State.ModNameActive`, `Keymap.KeyRepeats`, `KeysymNameInto` and the `ComposeState` `Feed`/`Status`/`KeySym`/`UTF8Into`/`Reset` methods — perform 0 allocations (asserted by `TestHotPathAllocs`). The string-returning `UTF8` and `KeysymName` still allocate their result.
+
+
+## v0.2.0: `raw` API change
+
+Only the `raw` package changed incompatibly; the root `xkbcommon` package is source-compatible (it gains `State.ModNameActive`, `State.ModIndexActive`, `Keymap.KeyRepeats` and `KeysymNameInto`).
+
+- `raw.Funcs` fields are no longer `func` values. Each function is now a method with the same exported name (`f.Xkb_state_key_get_one_sym(...)`), and the struct holds unexported symbol addresses.
+- Pointer parameters (strings, buffers, `*RuleNames`) are `unsafe.Pointer` instead of `uintptr`, and `RuleNames` fields are `unsafe.Pointer`. Pass the pointer directly; never pre-convert it to `uintptr`, which would not keep the memory alive.
+- `raw.Register(f, addresses, register)` is now `raw.Register(f, addresses)`; there is no `purego.RegisterFunc` hook.
+- A zero `raw.Funcs` is unusable: calling any method panics (`purego: fn is nil`) until `Register` has filled it. `xkbcommon.Available` does this for the package's own loader.
+- The generator only accepts `uintptr`, `uint32`, `int32` and `unsafe.Pointer` parameters and `uintptr`, `uint32`, `int32` or no return value, and rejects floats, bools and varargs.

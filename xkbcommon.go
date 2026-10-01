@@ -18,11 +18,15 @@ import (
 var ErrClosed = errors.New("xkbcommon: closed handle")
 
 func cstr(s string) []byte { return append([]byte(s), 0) }
-func ptr(b []byte) uintptr {
+
+// ptr returns the address of b's first byte, or nil. The result is only valid
+// as an argument to a raw.Funcs method, whose uintptr conversion keeps the
+// backing array alive and (via //go:uintptrescapes) on the heap for the call.
+func ptr(b []byte) unsafe.Pointer {
 	if len(b) == 0 {
-		return 0
+		return nil
 	}
-	return uintptr(unsafe.Pointer(&b[0]))
+	return unsafe.Pointer(&b[0])
 }
 func validString(s string) error {
 	if strings.IndexByte(s, 0) >= 0 {
@@ -112,7 +116,7 @@ func (c *Context) NewKeymapRules(rules, model, layout, variant, options string) 
 	args := []string{rules, model, layout, variant, options}
 	var b [5][]byte
 	var n raw.RuleNames
-	p := []*uintptr{&n.Rules, &n.Model, &n.Layout, &n.Variant, &n.Options}
+	p := []*unsafe.Pointer{&n.Rules, &n.Model, &n.Layout, &n.Variant, &n.Options}
 	for i, s := range args {
 		if e := validString(s); e != nil {
 			return nil, e
@@ -123,7 +127,7 @@ func (c *Context) NewKeymapRules(rules, model, layout, variant, options string) 
 		}
 	}
 	return newKeymap(c, func(h uintptr) uintptr {
-		v := loader.f.Xkb_keymap_new_from_names(h, uintptr(unsafe.Pointer(&n)), 0)
+		v := loader.f.Xkb_keymap_new_from_names(h, unsafe.Pointer(&n), 0)
 		runtime.KeepAlive(b)
 		runtime.KeepAlive(n)
 		return v
@@ -253,6 +257,7 @@ func (k *Keymap) NewState() (*State, error) {
 type State struct {
 	mu        sync.Mutex
 	h, keymap uintptr
+	name      [64]byte // NUL-terminated modifier-name scratch, guarded by mu
 }
 
 func (s *State) Close() error {
@@ -322,18 +327,19 @@ func (s *State) ModNameActive(name string) (bool, error) {
 	if s == nil {
 		return false, ErrClosed
 	}
-	var small [64]byte
-	var b []byte
-	if len(name) < len(small) {
-		copy(small[:], name)
-		b = small[:len(name)+1]
-	} else {
-		b = cstr(name)
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.h == 0 {
 		return false, ErrClosed
+	}
+	var b []byte
+	if len(name) < len(s.name) {
+		// Heap-resident scratch owned by State and guarded by s.mu.
+		b = s.name[:len(name)+1]
+		copy(b, name)
+		b[len(name)] = 0
+	} else {
+		b = cstr(name)
 	}
 	v := loader.f.Xkb_state_mod_name_is_active(s.h, ptr(b), raw.XKB_STATE_MODS_EFFECTIVE)
 	runtime.KeepAlive(b)
@@ -364,8 +370,8 @@ func (s *State) KeySym(keycode uint32) (uint32, error) {
 }
 
 // sizedUTF8 probes the required byte count (excluding NUL) and retries if it grows.
-func sizedUTF8(call func(uintptr, uintptr) int32) (string, error) {
-	n := call(0, 0)
+func sizedUTF8(call func(unsafe.Pointer, uintptr) int32) (string, error) {
+	n := call(nil, 0)
 	if n < 0 {
 		return "", errors.New("xkbcommon: UTF-8 conversion failed")
 	}
@@ -399,16 +405,14 @@ const MaxUTF8Buffer = 512
 var ErrUTF8Buffer = fmt.Errorf("xkbcommon: UTF-8 buffer length must be 1..%d", MaxUTF8Buffer)
 
 // utf8Into never creates a string or keeps the caller's storage. Native writes
-// are synchronous; the backing array is pinned only for the duration of the call.
+// are synchronous; the Syscall uintptr conversion keeps dst's backing array
+// alive and unmoved for the duration of the call (go:uintptrescapes).
 // Short buffers are wiped rather than exposing truncated UTF-8 or credentials.
 // Callers clear dst before any early return.
-func utf8Into(dst []byte, call func(uintptr, uintptr) int32) (int, error) {
+func utf8Into(dst []byte, call func(unsafe.Pointer, uintptr) int32) (int, error) {
 	if len(dst) < 1 || len(dst) > MaxUTF8Buffer {
 		return 0, ErrUTF8Buffer
 	}
-	var pin runtime.Pinner
-	pin.Pin(&dst[0])
-	defer pin.Unpin()
 	n := call(ptr(dst), uintptr(len(dst)))
 	runtime.KeepAlive(dst)
 	if n < 0 {
@@ -424,7 +428,8 @@ func utf8Into(dst []byte, call func(uintptr, uintptr) int32) (int, error) {
 }
 
 // UTF8Into writes into caller-owned mutable storage without constructing a
-// string. n excludes NUL; on io.ErrShortBuffer n is the required payload size,
+// string. dst is passed to C through a uintptr-escaping call, so its backing
+// array lives on the heap (a stack array sliced into dst is moved there once). n excludes NUL; on io.ErrShortBuffer n is the required payload size,
 // all of dst is cleared, and the caller needs n+1 bytes. dst must have length
 // 1..MaxUTF8Buffer. No storage is retained; the caller owns wiping after use.
 func (s *State) UTF8Into(keycode uint32, dst []byte) (int, error) {
@@ -437,7 +442,7 @@ func (s *State) UTF8Into(keycode uint32, dst []byte) (int, error) {
 	if s.h == 0 {
 		return 0, ErrClosed
 	}
-	return utf8Into(dst, func(p, n uintptr) int32 { return loader.f.Xkb_state_key_get_utf8(s.h, keycode, p, n) })
+	return utf8Into(dst, func(p unsafe.Pointer, n uintptr) int32 { return loader.f.Xkb_state_key_get_utf8(s.h, keycode, p, n) })
 }
 
 func (s *State) UTF8(keycode uint32) (string, error) {
@@ -449,13 +454,13 @@ func (s *State) UTF8(keycode uint32) (string, error) {
 	if s.h == 0 {
 		return "", ErrClosed
 	}
-	return sizedUTF8(func(p, n uintptr) int32 { return loader.f.Xkb_state_key_get_utf8(s.h, keycode, p, n) })
+	return sizedUTF8(func(p unsafe.Pointer, n uintptr) int32 { return loader.f.Xkb_state_key_get_utf8(s.h, keycode, p, n) })
 }
 func KeysymName(sym uint32) (string, error) {
 	if e := Available(); e != nil {
 		return "", e
 	}
-	return sizedUTF8(func(p, n uintptr) int32 { return loader.f.Xkb_keysym_get_name(sym, p, n) })
+	return sizedUTF8(func(p unsafe.Pointer, n uintptr) int32 { return loader.f.Xkb_keysym_get_name(sym, p, n) })
 }
 
 // KeysymNameInto writes the keysym name into dst without allocating, with the
@@ -465,7 +470,7 @@ func KeysymNameInto(sym uint32, dst []byte) (int, error) {
 	if e := Available(); e != nil {
 		return 0, e
 	}
-	return utf8Into(dst, func(p, n uintptr) int32 { return loader.f.Xkb_keysym_get_name(sym, p, n) })
+	return utf8Into(dst, func(p unsafe.Pointer, n uintptr) int32 { return loader.f.Xkb_keysym_get_name(sym, p, n) })
 }
 func KeysymFromName(name string) (uint32, error) {
 	if e := Available(); e != nil {
@@ -595,7 +600,7 @@ func (s *ComposeState) UTF8Into(dst []byte) (int, error) {
 	if s.h == 0 {
 		return 0, ErrClosed
 	}
-	return utf8Into(dst, func(p, n uintptr) int32 { return loader.f.Xkb_compose_state_get_utf8(s.h, p, n) })
+	return utf8Into(dst, func(p unsafe.Pointer, n uintptr) int32 { return loader.f.Xkb_compose_state_get_utf8(s.h, p, n) })
 }
 
 func (s *ComposeState) UTF8() (string, error) {
@@ -607,7 +612,7 @@ func (s *ComposeState) UTF8() (string, error) {
 	if s.h == 0 {
 		return "", ErrClosed
 	}
-	return sizedUTF8(func(p, n uintptr) int32 { return loader.f.Xkb_compose_state_get_utf8(s.h, p, n) })
+	return sizedUTF8(func(p unsafe.Pointer, n uintptr) int32 { return loader.f.Xkb_compose_state_get_utf8(s.h, p, n) })
 }
 func (s *ComposeState) KeySym() (uint32, error) {
 	if s == nil {
