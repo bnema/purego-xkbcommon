@@ -4,7 +4,7 @@ package raw
 import (
 	"unsafe"
 
-	"github.com/bnema/purego"
+	"bnema.dev/purego"
 )
 
 // Opaque C handles and scalar typedefs.

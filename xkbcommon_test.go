@@ -10,7 +10,7 @@ import (
 	"testing"
 	"unsafe"
 
-	"github.com/bnema/purego-xkbcommon/raw"
+	"bnema.dev/purego-xkbcommon/raw"
 )
 
 func live(t *testing.T) *Context {

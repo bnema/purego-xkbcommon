@@ -6,7 +6,7 @@ import (
 	"io"
 	"testing"
 
-	"github.com/bnema/purego-xkbcommon/raw"
+	"bnema.dev/purego-xkbcommon/raw"
 )
 
 func TestStateUTF8IntoBoundsAndLifetime(t *testing.T) {

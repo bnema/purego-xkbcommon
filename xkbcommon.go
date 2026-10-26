@@ -12,7 +12,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/bnema/purego-xkbcommon/raw"
+	"bnema.dev/purego-xkbcommon/raw"
 )
 
 var ErrClosed = errors.New("xkbcommon: closed handle")

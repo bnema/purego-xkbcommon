@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bnema/purego-xkbcommon/raw"
+	"bnema.dev/purego-xkbcommon/raw"
 )
 
 // fdKeymap compiles a pinned Wayland-format keymap from testdata.

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/bnema/purego-xkbcommon/internal/gen"
+	"bnema.dev/purego-xkbcommon/internal/gen"
 	"log"
 )
 

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/bnema/purego"
-	"github.com/bnema/purego-xkbcommon/raw"
+	"bnema.dev/purego"
+	"bnema.dev/purego-xkbcommon/raw"
 )
 
 var loader struct {
